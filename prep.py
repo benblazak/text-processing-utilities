@@ -1,13 +1,21 @@
 #! /usr/bin/env python3 -B
 # -----------------------------------------------------------------------------
-# Copyright &copy; 2016 Ben Blazak <bblazak@fullerton.edu>
+# Copyright &copy; 2016 Ben Blazak <benblazak.dev@gmail.com>
 # Released under the [MIT License] (http://opensource.org/licenses/MIT)
 # -----------------------------------------------------------------------------
 
-'''A module/script implementing a simple preprocessor for text files.
+'''A script/module implementing a simple preprocessor for text files.
 
-If run as a script, call `input` with the arguments passed via the command line
-(except for the program name, and with '-o -' prepended).
+If run as a script, `input` is called with the arguments passed via the command
+line (except for the program name, and with '-o -' prepended).
+
+The general syntax for input files is
+```
+normal text normal text !function_1,function_2(this text will be passed to
+self.function_2 as a string; the result will be passed to self.function_1 as a
+string; and the result of that will be output in place of this 'escape block')
+normal text normal text
+```
 
 References:
 - about iterators and generators:
@@ -67,7 +75,7 @@ class Prep:
 
         # (managed by `self.input`)
         self._jobname = None   # as in LaTeX
-        self._filename = None  # the name of the current file, or '<stdin>'
+        self._filename = None  # the name of the current file, or ''
 
         # (managed by `self.prep`)
         self._in = None   # the input string

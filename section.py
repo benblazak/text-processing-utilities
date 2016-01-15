@@ -1,6 +1,6 @@
 #! /usr/bin/env python3
 # -----------------------------------------------------------------------------
-# Copyright &copy; 2015 Ben Blazak <bblazak@fullerton.edu>
+# Copyright &copy; 2016 Ben Blazak <benblazak.dev@gmail.com>
 # Released under the [MIT License] (http://opensource.org/licenses/MIT)
 # -----------------------------------------------------------------------------
 
