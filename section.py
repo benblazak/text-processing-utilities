@@ -4,6 +4,22 @@
 # Released under the [MIT License] (http://opensource.org/licenses/MIT)
 # -----------------------------------------------------------------------------
 
+'''A script to 'section' files -- that is, to take one file and produce some
+number of others, where each of the derivative files contains some subset of
+the lines in the original.
+
+The basic syntax for input files is
+```
+normal text normal text
+// SECTION BEGIN section-name
+this text will be included in the 'section-name' section
+// SECTION END section-name
+normal text normal text
+```
+'''
+
+# -----------------------------------------------------------------------------
+
 import os.path
 import re
 import sys

@@ -9,13 +9,16 @@
 If run as a script, `input` is called with the arguments passed via the command
 line (except for the program name, and with '-o -' prepended).
 
-The general syntax for input files is
+The basic syntax for input files is
 ```
 normal text normal text !function_1,function_2(this text will be passed to
 self.function_2 as a string; the result will be passed to self.function_1 as a
 string; and the result of that will be output in place of this 'escape block')
 normal text normal text
 ```
+where the functions may in general do whatever they want (i.e. whatever python3
+is capable of doing).
+
 
 References:
 - about iterators and generators:
