@@ -1,15 +1,37 @@
-#! /usr/bin/env python3
+#! /usr/bin/env python3 -B
 # -----------------------------------------------------------------------------
 # Copyright &copy; 2016 Ben Blazak <bblazak@fullerton.edu>
 # Released under the [MIT License] (http://opensource.org/licenses/MIT)
 # -----------------------------------------------------------------------------
 
+'''A module/script implementing a simple preprocessor for text files.
+
+If run as a script, call `input` with the arguments passed via the command line
+(except for the program name, and with '-o -' prepended).
+
+References:
+- about iterators and generators:
+  <http://chimera.labs.oreilly.com/books/1230000000393/ch04.html>
+- about exec and eval (mostly in python 2):
+  <http://lucumr.pocoo.org/2011/2/1/exec-in-python/>
+'''
+
+# -----------------------------------------------------------------------------
+
+import functools
+import os.path
 import re
 import sys
 import textwrap
 
-# open `sys.stdin` with universal newlines
+# open `sys.stdin` and `sys.stdout` with universal newlines
 sys.stdin = open( sys.stdin.fileno() )
+sys.stdout = open( sys.stdout.fileno(), 'w' )
+
+# -----------------------------------------------------------------------------
+
+class Namespace:
+    pass
 
 # -----------------------------------------------------------------------------
 
@@ -18,266 +40,450 @@ class Prep:
     class Error(Exception):
         pass
 
-    def __init__(self, outfile=sys.stdout):
-        self.DEBUG = False
+    class SyntaxError(Error):
+        pass
 
-        self.outfile = outfile
+    def raiseError(self, message):
+        raise self.Error(
+            '"' + self._filename + '"'
+            + ' line '
+            + str( self._in.count('\n', 0, self._pos) + 1 )
+            + ': '
+            + message
+        )
 
-        # .....................................................................
+    def raiseSyntaxError(self, message):
+        raise self.SyntaxError(
+            '"' + self._filename + '"'
+            + ' line '
+            + str( self._in.count('\n', 0, self._pos) + 1 )
+            + ': '
+            + message
+        )
 
-        def _print(esc, **kwargs):
-            self.printinline( eval( esc, globals() ) )
+    # . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
 
-        def _exec(esc, **kwargs):
-            exec( textwrap.dedent(esc), globals() )
+    def __init__(self):
 
-        def _print_or_exec(esc, **kwargs):
-            try:
-                _print(esc, **kwargs)
-            except:
-                _exec(esc, **kwargs)
+        # (managed by `self.input`)
+        self._jobname = None   # as in LaTeX
+        self._filename = None  # the name of the current file, or '<stdin>'
 
-        def _print_or_exec_block(esc, **kwargs):
-            s0 = re.sub( r'\S*$', '', kwargs['e0'].rstrip() )
-            s1 = re.sub( r'^\S*', '', kwargs['d1'].lstrip() )
+        # (managed by `self.prep`)
+        self._in = None   # the input string
+        self._pos = None  # the current position in `self._in`
+        self._out = None  # the list of strings to ''.join() into the output
 
-            n0 = s0.count('\n')
-            n1 = s1.count('\n')
+        # (used by `self.prep`)
+        self._esc = '!'  # the string beginning an "escape"
 
-            if n0 == 0:
-                if s0 != '':
-                    self.printinline( ' ' )
-            elif n0 == 1:
-                    self.printinline( '\n' )
-            else:
-                self.printinline( '\n\n' )
+        # (used by `self.indent`)
+        self._indent = 4  # the default number of spaces to indent
 
-            position = 0
-            if self.outfile.seekable():
-                position = self.outfile.tell()
+    # (managed by `self.input`)
 
-            _print_or_exec(esc, **kwargs)
+    @property
+    def _path(self):
+        return sys.path
 
-            if self.outfile.seekable() and position != self.outfile.tell():
-                if n1 == 0:
-                    if s1 != '':
-                        self.printinline( ' ' )
-                elif n1 == 1:
-                    self.printinline( '\n' )
-                else:
-                    self.printinline( '\n\n' )
-            else:
-                if n0 == 0:
-                    if n1 == 0:
-                        if s0 == '' and s1 != '':
-                            self.printinline( ' ' )
-                    elif n1 == 1:
-                        self.printinline( '\n' )
-                    else:
-                        self.printinline( '\n\n' )
-                elif n0 == 1:
-                    if n1 > 1:
-                        self.printinline( '\n' )
+    @_path.setter
+    def _path(self, p):
+        sys.path = p
 
-        # .....................................................................
+    # .........................................................................
 
-        _delimiter_default = [
-            (
-                re.compile(r'\(\(\(\n?'), re.compile(r'\n?\)\)\)'),
-                { 'nest': True, }
-            ),
-            (
-                re.compile(r'\('), re.compile(r'\)'),
-                { 'nest': True, }
-            ),
-        ]
+    class Global:
+        '''Provide access (more or less) to the global namespace via `self`.
 
-        # .....................................................................
+        WARNINGS:
+        - In general, this should only be used to call functions that take a
+          string and return some printable object.  Functions that have side
+          effects, especially the global versions of `eval` and `exec`, should
+          be avoided, or used very very carefully.
+        '''
+        def __getattr__(self, key):
+            '''Search for the given attribute in the module namespace, then in
+            the builtins dictionary.
+            '''
+            for module in ( sys.modules[__name__], globals()['__builtins__'] ):
+                try:
+                    return getattr( module, key )
+                except AttributeError:
+                    pass
 
-        self.escape = [
+            raise AttributeError(
+                str(type(self)) + ': could not find ' + "'" + key + "'"
+            )
+    Global = Global()
 
-            ( re.compile(r'!'), {
-                'delimiter': _delimiter_default,
-                'function': _print_or_exec,
-            } ),
+    # . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
 
-            ( re.compile(r'!p(rint)?'), {
-                'delimiter': _delimiter_default,
-                'function': _print,
-            } ),
+    def eval(self, _in):
+        '''`eval` the given text and return the result.
+        '''
+        return eval(self.dedent(_in))
 
-            ( re.compile(r'!e(xec)?'), {
-                'delimiter': _delimiter_default,
-                'function': _exec,
-            } ),
+    def exec(self, _in):
+        '''`exec` the given text inside a function.
 
-            # .................................................................
+        It's useful to wrap the given text in a function then call that
+        function inside the `exec`, rather than just `exec`ing it directly,
+        because of the way python3 handles local variables inside an `exec`.
+        '''
+        exec('\n'.join([
+            'def function(self, _in):',
+            self.indent(self.dedent(_in)),
+            'function(self, _in)',
+        ]))
 
-            ( re.compile(r'\s*!c(omment)?'), {
-                'delimiter': _delimiter_default + [
-                    (
-                        re.compile(r'\.\.'), re.compile(r'(?=\n)'),
-                        { 'nest': False, }
-                    ),
-                ],
-                'function': lambda esc, **kwargs: self.printinline(
-                    re.sub( r'[^\n]*$', '', kwargs['e0'] ) ),
-            } ),
+    def geval(self, _in):
+        '''`eval` the given text in the global namespace and return the result.
+        '''
+        return eval(self.dedent(_in), globals())
 
-            ( re.compile(r'!(dnl|deletenewline)'), {
-                'delimiter': [
-                    ( d[0], re.compile(d[1].pattern + r'\n?'), d[2] )
-                    for d in _delimiter_default
-                ] + [
-                    (
-                        re.compile(r'\.\.'), re.compile(r'\n'),
-                        { 'nest': False, }
-                    ),
-                ],
-                'function': lambda esc, **kwargs: None,
-            } ),
+    def gexec(self, _in):
+        '''`exec` the given text in the global namespace.
+        '''
+        exec(self.dedent(_in), globals());
 
-            ( re.compile(r'\s*!i(nline)?'), {
-                'delimiter': [
-                    ( d[0], re.compile(d[1].pattern + r'\s*'), d[2] )
-                    for d in _delimiter_default
-                ],
-                'function': _print_or_exec,
-            } ),
+    # . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
 
-            ( re.compile(r'\s*!b(lock)?'), {
-                'delimiter': [
-                    ( d[0], re.compile(d[1].pattern + r'\s*'), d[2] )
-                    for d in _delimiter_default
-                ],
-                'function': _print_or_exec_block,
-            } ),
+    def comment(self, _in):
+        '''Ignore given text.
+        '''
+        pass
 
-            # .................................................................
+    def comment_to_newline(self, _in):
+        '''Delete preceding whitespace up to a newline (exclusive), and
+        following text up to a newline (exclusive).
+        '''
+        pos = self._out[-1].rfind('\n')
+        pos = re.compile( r'\s*$' ).search( self._out[-1], pos+1 ).start()
+        self._out[-1] = self._out[-1][:pos]
 
-            ( re.compile(r'!\w*'), {
-                'delimiter': _delimiter_default,
-                'function': lambda esc, **kwargs: self.error(
-                    'Unknown escape: ' + kwargs['e0'] ),
-            } ),
+        pos = self._in.find('\n', self._pos)
+        if pos == -1: self._pos = len(self._in)
+        else:         self._pos = pos
 
-            ( re.compile(r'!\w*'), {
-                'delimiter': _delimiter_default + [
-                    (
-                        re.compile(r'\.\.\s*'), re.compile(r'(?:\n)'),
-                        { 'nest': False, }
-                    ),
-                ],
-                'function': lambda esc, **kwargs: self.error(
-                    'Unknown escape+delimiter: ' + kwargs['e0']+kwargs['d0'] ),
-            } ),
+    def delete_to_newline(self, _in):
+        '''Delete following text up to the following newline (inclusive).
+        '''
+        pos = self._in.find('\n', self._pos)
+        if pos == -1: self._pos = len(self._in)
+        else:         self._pos = pos+1
 
-        ]
+    def delete_whitespace(self, _in):
+        '''Delete preceding and following whitespace.
 
-    def print(self, *args, **kwargs):
-        print( *args, file=self.outfile, **kwargs )
+        Notes:
+        - Preceding data has already been processed.
+        - Following data has not net been processed.
+        '''
+        self.delete_whitespace_left(_in)
+        self.delete_whitespace_right(_in)
 
-    def printinline(self, *args, **kwargs):
-        print( *args, end='', **kwargs )
+    def delete_whitespace_left(self, _in):
+        '''Delete preceding whitespace.
 
-    def error(self, msg):
-        raise self.Error(msg)
+        Notes:
+        - Acts on data that has already been processed.
+        '''
+        self._out[-1] = self._out[-1].rstrip()
 
-    def input(self, path):
-        self.prep(open(path).read())
+    def delete_whitespace_right(self, _in):
+        '''Delete following whitespace.
+
+        Notes:
+        - Acts on data that has not yet been processed.
+        '''
+        self._pos = re.compile( r'\s*' ).match( self._in, self._pos ).end()
+
+    # . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+    def print(self, *args, sep=' ', end=''):
+        '''Add the given text to `self._out`.
+
+        Notes:
+        - It probably wouldn't make much sense to put this function in a
+          function list; but it might be useful inside an exec, for instance :)
+        '''
+        self._out.append( sep.join([str(o) for o in args]) + end )
+
+    # . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+    def repr(self, _in):
+        r'''Returns a string containing a printable representation of an
+        object.
+
+        Good for quoting within an eval or exec, similar to a raw triple quoted
+        string, as in
+        ```
+        !exec,prep(
+            for i in range(0,5):
+                self.print( !repr,strip,dedent(
+                  repeated text!
+                ), end='\n' )
+        )!delete_to_newline
+        ```
+        '''
+        return repr(_in)
+
+    def strip(self, _in):
+        '''Remove leading and trailing whitespace in the given text.
+        '''
+        return _in.strip()
+
+    def dedent(self, _in):
+        '''Remove common leading whitespace in the given text.
+        '''
+        return textwrap.dedent(_in)
+
+    def indent(self, _in, level=None):
+        '''Indent the given text by `level` spaces.
+        '''
+        if level is None: level = self._indent
+        return textwrap.indent( _in, ' '*level )
+    indent_1 = lambda self, _in: self.indent(_in, level=1)
+    indent_2 = lambda self, _in: self.indent(_in, level=2)
+    indent_3 = lambda self, _in: self.indent(_in, level=3)
+    indent_4 = lambda self, _in: self.indent(_in, level=4)
+    indent_5 = lambda self, _in: self.indent(_in, level=5)
+    indent_6 = lambda self, _in: self.indent(_in, level=6)
+    indent_7 = lambda self, _in: self.indent(_in, level=7)
+    indent_8 = lambda self, _in: self.indent(_in, level=8)
+
+    # .........................................................................
 
     def prep(self, _in):
+        '''Preprocess the given input string.
         '''
-        `_in` must be a string
+
+        old = ( self._in, self._pos, self._out )
+        ( self._in, self._pos, self._out ) = ( _in, 0, [] )
+
+
+        while True:
+            match = re.compile(
+                r'(' + re.escape(self._esc) + r')([\w.,]*)(\(*)'
+            ).search( self._in, self._pos )
+
+            if match is None:
+                self._out.append(self._in[self._pos:])
+                break
+
+            # - this will always append at least an empty string, so
+            #   `self._out` will not be empty when the first function is called
+            #   below
+            self._out.append(self._in[self._pos:match.start()])
+            self._pos = match.end()
+
+            if match.group(2) == '' and match.group(3) == '':
+                self._out.append(match.group())
+                continue
+
+            # save the pieces of `match` that we need (it may change below)
+            functions = match.group(2)
+            left = match.group(3)
+            right = ')' * len(left)
+
+            if len(left) > 0:
+                delimiter = re.compile(
+                    r'(' + re.escape(left) + r')|(' + re.escape(right) + r')'
+                )
+                count = 1
+                while count > 0:
+                    match = delimiter.search( self._in, match.end() )
+                    if match is None:
+                        self.raiseSyntaxError( 'Unbalanced delimiter' )
+                    if match.group(1) is not None:
+                        count += 1
+                    else:
+                        count -= 1
+
+            start_pos = self._pos  # in case there's an error
+            substring = self._in[self._pos:match.start()]
+            self._pos = match.end()
+            for function in reversed(functions.split(',')):
+                try:
+                    function = \
+                        functools.reduce(getattr, [self]+function.split('.'))
+                    substring = function(substring)
+                    substring = str(substring) if substring is not None else ''
+                except Exception:
+                    self._pos = start_pos
+                    self.raiseError( '`prep` failed' )
+            self._out.append(substring)
+
+        _out = ''.join(self._out)
+        ( self._in, self._pos, self._out ) = old
+        return _out
+
+    # .........................................................................
+
+    def input(self, *args):
+        '''Read and preprocess files and/or `sys.stdin`.
+
+        When called within a .prep file, this function behaves as described by
+        `usage`, except that
+        - If there is no [-o | --output], the result of running `self.prep` on
+          the input will be returned as a string
+        - If `self._jobname` is not `None` (which it always will be, when
+          called from the command line) and there is no [--jobname],
+          `self._jobname` will not be changed
+
+        When called via the command line, this function behaves as described by
+        `usage`.
+
+        Notes:
+        - I'm not using `argparse` for this because loading it seems to take a
+          small, but noticeable, amount of time (about 0.015 seconds).
         '''
 
-        def match(regex, pattern):
-            match = regex.match(pattern)
-            if match is not None:
-                return match.group()
+        def wrap(width, indent, text):
+            return '\n'.join(
+                textwrap.wrap(
+                    textwrap.dedent( text ).lstrip(),
+                    width = width,
+                    initial_indent = ' ' * indent,
+                    subsequent_indent = ' ' * indent,
+                )
+            )
+        usage = '\n'.join((
+            'usage: ' + sys.argv[0] + ' [OPTIONS] INPUT_FILE*',
+            '',
+            wrap( width=79, indent=0, text='''
+                Options may be placed anywhere in the list of arguments.  If no
+                INPUT_FILE is present, input will be read from stdin.
+            ''' ),
+            '',
+            '-h|--help', wrap( width=79-4, indent=4, text='''
+                Show this documentation and exit.
+            ''' ),
+            '',
+            '-o|--output FILE', wrap( width=79-4, indent=4, text='''
+                If FILE is -, write to stdout (this is the default).  Otherwise
+                write to FILE.  Later occurrences of this option override
+                earlier ones.
+            ''' ),
+            '',
+            '--jobname NAME', wrap( width=79-4, indent=4, text='''
+                Set the name of this job (by default the basename of the first
+                input file, or '' if the first input is stdin).  Later
+                occurrences of this option override earlier ones.
+            ''' ),
+            '',
+            '--', wrap( width=79-4, indent=4, text='''
+                Process all remaining arguments as input files (this may be
+                useful if some filenames begin with -).
+            ''' ),
+        ))
+
+        # vars
+        inputs = []
+        output = None
+        jobname = None
+
+        # helper functions
+        def error(message):
+            print( sys.argv[0]+':', message, file=sys.stderr )
+            print( usage, file=sys.stderr )
+            exit(1)
+
+        # process arguments
+        it = iter(args)
+        for arg in it:
+
+            if arg in ( '-h', '--help' ):
+                print(usage)
+                exit(0)
+
+            elif arg in ( '-o', '--output' ):
+                try:
+                    output = next(it)
+                except StopIteration:
+                    error( '[-o | --output] requires a following argument' )
+
+            elif arg in ( '--jobname', ):
+                try:
+                    jobname = next(it)
+                except StopIteration:
+                    error( '[--jobname] requires a following argument' )
+
+            elif arg == '--':
+                for arg in it:
+                    inputs.append(open(arg))
+
+            elif arg == '-':
+                inputs.append(sys.stdin)
+
+            elif arg[0] == '-':
+                error( 'unknown option: ' + arg )
+
             else:
-                return None
+                inputs.append(open(arg))
 
-        while len(_in):
-            for e in self.escape:
+        # normalize
+        if inputs == []:
+            inputs.append(sys.stdin)
 
-                e0 = match(e[0], _in)
-                if e0 is not None:
-
-                    if self.DEBUG:
-                        self.printinline( '<escape=' + e0 + '>' )
-
-                    for d in e[1]['delimiter']:
-
-                        d0 = match(d[0], _in[len(e0):])
-                        if d0 is not None:
-
-                            if self.DEBUG:
-                                self.printinline( '<delimiter=' + d0 + '>' )
-
-                            d[2]['count'] = 1
-
-                            esc = ''  # the escaped string
-                            _in = _in[len(e0)+len(d0):]
-
-                            # collect characters, until ending delimiter
-                            while True:
-                                if not len(_in):
-                                    self.error('Escape reached EOF')
-
-                                if d[2]['nest']:
-                                    d0 = match(d[0], _in)
-                                    if d0 is not None:
-                                        d[2]['count'] += 1
-
-                                d1 = match(d[1], _in)
-                                if d1 is not None:
-                                    d[2]['count'] -= 1
-
-                                if d[2]['count'] > 0:
-                                    esc += _in[:1]
-                                    _in = _in[1:]
-                                else:
-                                    break;
-
-                            _in = _in[len(d1):]  # remove end delimiter
-
-                            if self.DEBUG:
-                                self.printinline( '<esc=' + esc + '>' )
-                                self.printinline( '<delimiter=' + d1 + '>' )
-                            else:
-                                e[1]['function'](esc, e0=e0, d0=d0, d1=d1)
-                                break
-
-                    else:  # if we didn't break out of this loop
-                        continue
-                    break
-
+        if output is not None:
+            if output == '-':
+                output = sys.stdout
             else:
-                self.printinline( _in[:1] )
-                _in = _in[1:]
+                output = open(output, 'w')
+
+        # prep
+
+        old = ( self._jobname, self._filename, self._path )
+        _out = []
+
+        if jobname is not None:
+            self._jobname = jobname
+        elif self._jobname is None:
+            if isinstance(inputs[0].name, str):
+                self._jobname = \
+                    os.path.basename(os.path.normpath(inputs[0].name))
+            else:
+                self._jobname = ''
+                # - `sys.stdin.name` will not be a string, because we reopened
+                #   it by file descriptor at the top of the module
+
+        for i in inputs:
+            self._path = old[-1].copy()  # each input has its own sys.path
+
+            if i == sys.stdin:
+                self._filename = ''
+                self._path[0] = ''
+            else:
+                self._filename = os.path.normpath(i.name)
+                self._path[0] = os.path.dirname(os.path.abspath(i.name))
+
+            _out += self.prep(i.read())
+
+        _out = ''.join(_out)
+        ( self._jobname, self._filename, self._path ) = old
+
+        # return
+        if output is not None:
+            print( _out, end='', file=output )
+        else:
+            return _out
 
 # -----------------------------------------------------------------------------
 
-prep = Prep()
+setattr( Prep, 'g', Prep.Global )
+
+setattr( Prep, '', Prep.eval )
+setattr( Prep, 'c', Prep.comment )
+
+setattr( Prep, 'cnl', Prep.comment_to_newline )
+setattr( Prep, 'dnl', Prep.delete_to_newline )
+setattr( Prep, 'dws', Prep.delete_whitespace )
+setattr( Prep, 'dwsl', Prep.delete_whitespace_left )
+setattr( Prep, 'dwsr', Prep.delete_whitespace_right )
+
+# -----------------------------------------------------------------------------
 
 if __name__ == '__main__':
-    usage = (
-        'USAGE:\n'
-        + '    ' + sys.argv[0] + ' --help\n'
-        + '    cat in_file [in_file ...] | ' + sys.argv[0] + ' > out_file\n'
-    )
-
-    if '--help' in sys.argv:
-        print(usage)
-        if len(sys.argv) != 2:
-            exit(1)
-        else:
-            exit(0)
-
-    if len(sys.argv) != 1:
-        print(usage)
-        exit(1)
-
-    prep.prep(sys.stdin.read())
+    Prep().input( '-o', '-', *sys.argv[1:] )
 
