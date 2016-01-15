@@ -10,19 +10,23 @@ import sys
 
 # -----------------------------------------------------------------------------
 
-def raise__illegal_section(filepath, line_number):
-    raise Exception( 'Illegal SECTION in input file '
+class Error:
+    pass
+
+def section(filepath, line_comment_begin):
+
+    def raise__illegal_section(filepath, line_number):
+        raise Error( 'Illegal SECTION in input file '
                      + '"' + filepath + '", '
                      + 'line ' + str(line_number) )
 
-def gen_section(filepath, line_comment_begin):
     section_re = line_comment_begin + r'\s*SECTION'
-    ignore_re  = r'\s+IGNORE'
+    ignore_re  = r'\s+IGNORE'  # ignore line
     begin_re   = r'\s+BEGIN'
     end_re     = r'\s+END'
     pause_re   = r'\s+PAUSE'
     resume_re  = r'\s+RESUME'
-    indent_re  = r'\s+INDENT'
+    indent_re  = r'\s+INDENT'  # reset indent
     name_re    = r'\s+([\w-]+)'
 
     section = re.compile( section_re )
@@ -85,8 +89,8 @@ def gen_section(filepath, line_comment_begin):
 
 if __name__ == '__main__':
     if len(sys.argv) != 3:
-        print( 'USAGE: ' + sys.argv[0] + ' <filepath> <line_comment_begin>' )
+        print( 'USAGE: ' + sys.argv[0] + ' FILEPATH LINE_COMMENT_BEGIN' )
         sys.exit(1)
 
-    gen_section(sys.argv[1], sys.argv[2])
+    section(sys.argv[1], sys.argv[2])
 
