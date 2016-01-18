@@ -96,7 +96,7 @@ def section(filepath, line_comment_begin):
     f.close()
 
     for s in sections_lines:
-        newpath = filepath + '.gen.section.' + s
+        newpath = filepath + '.section.' + s
         f = open(newpath,'w')
         f.write(sections_lines[s])
         f.close()
