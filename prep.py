@@ -2,6 +2,7 @@
 # -----------------------------------------------------------------------------
 # Copyright &copy; 2016 Ben Blazak <benblazak.dev@gmail.com>
 # Released under the [MIT License] (http://opensource.org/licenses/MIT)
+# Project located at <https://github.com/benblazak/text-processing-utilities>
 # -----------------------------------------------------------------------------
 
 '''A script/module implementing a simple preprocessor for text files.
