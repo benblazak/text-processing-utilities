@@ -31,6 +31,7 @@ References:
 # -----------------------------------------------------------------------------
 
 import functools
+import os
 import os.path
 import re
 import sys
@@ -93,6 +94,14 @@ class Prep:
         self._indent = 4  # the default number of spaces to indent
 
     # (managed by `self.input`)
+
+    @property
+    def _cwd(self):
+        return os.getcwd()
+
+    @_cwd.setter
+    def _cwd(self, p):
+        os.chdir(p)
 
     @property
     def _path(self):
@@ -438,15 +447,9 @@ class Prep:
         if inputs == []:
             inputs.append(sys.stdin)
 
-        if output is not None:
-            if output == '-':
-                output = sys.stdout
-            else:
-                output = open(output, 'w')
-
         # prep
 
-        old = ( self._jobname, self._filename, self._path )
+        old = ( self._jobname, self._filename, self._cwd, self._path )
         _out = []
 
         if jobname is not None:
@@ -462,6 +465,7 @@ class Prep:
 
         for i in inputs:
             self._path = old[-1].copy()  # each input has its own sys.path
+            self._cwd = old[-2]          # each input has its own cwd
 
             if i == sys.stdin:
                 self._filename = ''
@@ -469,11 +473,19 @@ class Prep:
             else:
                 self._filename = os.path.normpath(i.name)
                 self._path[0] = os.path.dirname(os.path.abspath(i.name))
+                self._cwd = self._path[0]
 
             _out += self.prep(i.read())
 
         _out = ''.join(_out)
-        ( self._jobname, self._filename, self._path ) = old
+        ( self._jobname, self._filename, self._cwd, self._path ) = old
+
+        # normalize
+        if output is not None:
+            if output == '-':
+                output = sys.stdout
+            else:
+                output = open(output, 'w')
 
         # return
         if output is not None:
