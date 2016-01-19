@@ -245,7 +245,7 @@ class Section:
 
         for s,lines in sections.items():
             if output is None or s in output:
-                with open(base + '.section.' + s + '.cpp', 'w') as f:
+                with open(base + '.section.' + s, 'w') as f:
                     f.write(lines)
 
 # -----------------------------------------------------------------------------
