@@ -62,18 +62,18 @@ class Prep:
         # tracebacks for these errors aren't very helpful
         sys.tracebacklimit = 1
 
+        lineno = self._in.count('\n', 0, self._pos) + 1
+        linepos = [
+            self._in.rfind('\n', 0, self._pos) + 1,
+            self._in.find('\n', self._pos),
+        ]
+        linepos = [ p if p != -1 else 0 for p in linepos ]
+
         raise errortype(
-            '"' + self._filename + '"'
-            + ' line '
-            + str( self._in.count('\n', 0, self._pos) + 1 )
-            + ': '
-            + message
-            + self._in[
-                self._in.rfind('\n', 0, self._pos)
-                : self._in.find('\n', self._pos) + 1
-              ]
-            + ' ' * ( self._pos - self._in.rfind('\n', 0, self._pos) - 1 )
-            + '^'
+            '"' + self._filename + '"' + ' line ' + str(lineno)
+            + ': ' + message + '\n'
+            + self._in[slice(*linepos)] + '\n'
+            + ' ' * ( self._pos - linepos[0] ) + '^'
         )
 
     def raiseSyntaxError(self, message):
