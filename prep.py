@@ -56,23 +56,28 @@ class Prep:
     class SyntaxError(Error):
         pass
 
-    def raiseError(self, message):
-        raise self.Error(
+    def raiseError(self, message, errortype=None):
+        if errortype is None: errortype = self.Error
+
+        # tracebacks for these errors aren't very helpful
+        sys.tracebacklimit = 1
+
+        raise errortype(
             '"' + self._filename + '"'
             + ' line '
             + str( self._in.count('\n', 0, self._pos) + 1 )
             + ': '
             + message
+            + self._in[
+                self._in.rfind('\n', 0, self._pos)
+                : self._in.find('\n', self._pos) + 1
+              ]
+            + ' ' * ( self._pos - self._in.rfind('\n', 0, self._pos) - 1 )
+            + '^'
         )
 
     def raiseSyntaxError(self, message):
-        raise self.SyntaxError(
-            '"' + self._filename + '"'
-            + ' line '
-            + str( self._in.count('\n', 0, self._pos) + 1 )
-            + ': '
-            + message
-        )
+        self.raiseError(message, self.SyntaxError)
 
     # . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
 
@@ -330,7 +335,10 @@ class Prep:
                         functools.reduce(getattr, [self]+function.split('.'))
                     substring = function(substring)
                     substring = str(substring) if substring is not None else ''
-                except Exception:
+                except Exception as e:
+                    if isinstance(e, self.Error): raise
+                    # raising another doesn't seem to be helpful in this case
+
                     self._pos = start_pos
                     self.raiseError( '`prep` failed' )
             self._out.append(substring)
